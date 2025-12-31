@@ -1,9 +1,9 @@
-import { createClient } from '@/lib/supabase/server';
+import { createClient } from '@supabase/supabase-js';
 import { sendEmail } from '@/lib/email';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
-    // Verify cron secret (skip in development for easier testing)
+    // Verify cron secret
     const authHeader = request.headers.get('authorization');
     const cronSecret = process.env.CRON_SECRET;
     const isDev = process.env.NODE_ENV === 'development';
@@ -15,7 +15,19 @@ export async function GET(request: NextRequest) {
         );
     }
 
-    const supabase = await createClient();
+    // Use Service Role Key to bypass RLS
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+    if (!supabaseServiceKey) {
+        console.error('❌ Missing SUPABASE_SERVICE_ROLE_KEY environment variable');
+        return NextResponse.json(
+            { error: 'Configuration Error: Missing SUPABASE_SERVICE_ROLE_KEY' },
+            { status: 500 }
+        );
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const now = new Date().toISOString();
 
     try {
@@ -28,6 +40,9 @@ export async function GET(request: NextRequest) {
             .order('scheduled_time')
             .limit(50); // Process in batches
 
+        console.log(`🕒 Cron Run at (UTC): ${now}`);
+        console.log(`🔍 Checking for jobs scheduled <= ${now}`);
+
         if (fetchError) {
             console.error('Failed to fetch pending jobs:', fetchError);
             return NextResponse.json(
@@ -36,9 +51,12 @@ export async function GET(request: NextRequest) {
             );
         }
 
+        console.log(`📋 Found ${pendingJobs?.length || 0} pending jobs`);
+
         if (!pendingJobs || pendingJobs.length === 0) {
             return NextResponse.json({
                 message: 'No pending jobs to process',
+                currentTime: now,
                 processed: 0,
             });
         }
